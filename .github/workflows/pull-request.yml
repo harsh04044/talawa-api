@@ -139,9 +139,9 @@ jobs:
           git diff --name-only --diff-filter=ACMRT -z ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} > /tmp/changed_files.txt
           # Convert NUL-delimited to JSON array for safe handling
           python3 -c "import sys, json; files = [f for f in open('/tmp/changed_files.txt', 'rb').read().split(b'\x00') if f]; print(json.dumps([f.decode('utf-8', errors='replace') for f in files]))" > /tmp/changed_files.json
-          echo "changed_files_json<<EOF" >> $GITHUB_OUTPUT
+          echo "changed_files_json<<GITHUB_OUTPUT_DELIMITER_CHANGED_FILES" >> $GITHUB_OUTPUT
           cat /tmp/changed_files.json >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "GITHUB_OUTPUT_DELIMITER_CHANGED_FILES" >> $GITHUB_OUTPUT
 
       - name: Filter existing files
         id: existing-files
@@ -173,9 +173,9 @@ jobs:
           PYTHON_SCRIPT
           
           # Output existing files as JSON for safe consumption
-          echo "existing_files_json<<EOF" >> $GITHUB_OUTPUT
+          echo "existing_files_json<<GITHUB_OUTPUT_DELIMITER_EXISTING_FILES" >> $GITHUB_OUTPUT
           cat /tmp/existing_files.json >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "GITHUB_OUTPUT_DELIMITER_EXISTING_FILES" >> $GITHUB_OUTPUT
 
       - name: Set up Python
         uses: actions/setup-python@v5
