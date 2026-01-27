@@ -210,7 +210,11 @@ class DisableStatementsChecker:
         try:
             with open(file_path, encoding="utf-8") as f:
                 content = f.read()
+        except FileNotFoundError:
+            # File was deleted between existence check and open
+            return []
         except (OSError, UnicodeDecodeError) as e:
+            # Other errors (permissions, encoding, etc.) are real issues
             return [f"{file_path}: Error reading file - {e}"]
 
         violations = []
