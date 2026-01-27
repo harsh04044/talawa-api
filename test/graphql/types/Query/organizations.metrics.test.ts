@@ -1,8 +1,17 @@
-import { print } from "graphql";
-import type { FastifyRequest } from "fastify";
 import { faker } from "@faker-js/faker";
+import type { FastifyRequest } from "fastify";
 import { assertToBeNonNullish } from "test/helpers";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import type { PerformanceTracker } from "~/src/utilities/metrics/performanceTracker";
 import { server } from "../../../server";
 import { mercuriusClient } from "../client";
 import {
@@ -13,43 +22,89 @@ import {
 	Mutation_deleteOrganizationMembership,
 	Mutation_deleteUser,
 	Query_organizations,
+	Query_organizationsWithArgs,
 	Query_signIn,
 } from "../documentNodes";
-import type { PerformanceTracker } from "~/src/utilities/metrics/performanceTracker";
-import { createPerformanceTracker } from "~/src/utilities/metrics/performanceTracker";
+
+/**
+ * Type for organizations query response
+ */
+interface OrganizationsQueryResponse extends Record<string, unknown> {
+	organizations: Array<{
+		id: string;
+		avatarURL: string | null;
+		name: string;
+		city: string | null;
+		state: string | null;
+		countryCode: string;
+	}> | null;
+}
+
+/**
+ * Type for organizations query result (legacy, for backward compatibility)
+ */
+interface OrganizationsQueryResult extends Record<string, unknown> {
+	organizations?: Array<{
+		id: string;
+		avatarURL?: string | null;
+		name: string;
+		city?: string | null;
+		state?: string | null;
+		countryCode: string;
+	}>;
+}
+
+/**
+ * Array to store captured performance trackers
+ * Cleared between tests to avoid leaks
+ */
+const capturedPerfTrackers: PerformanceTracker[] = [];
+
+/**
+ * Single onRequest hook to capture perf trackers for all requests
+ * Registered once and reused for all test calls
+ */
+let perfCaptureHookRegistered = false;
+const perfCaptureHook = async (request: FastifyRequest) => {
+	if (request.url === "/graphql" && request.perf) {
+		capturedPerfTrackers.push(request.perf);
+	}
+};
 
 /**
  * Test helper to execute GraphQL query via mercuriusClient and capture performance tracker
- * Uses a hook to capture the perf tracker from the request object
+ * Uses a shared array to capture perf trackers, with index tracking for concurrent requests
  */
-async function queryWithPerfTracker<T>(
+async function queryWithPerfTracker<
+	_T extends Record<string, unknown> = Record<string, unknown>,
+>(
 	query: Parameters<typeof mercuriusClient.query>[0],
 	options?: Parameters<typeof mercuriusClient.query>[1],
 ): Promise<{
-	result: Awaited<ReturnType<typeof mercuriusClient.query<T>>>;
+	result: Awaited<ReturnType<typeof mercuriusClient.query>>;
 	perf: PerformanceTracker | undefined;
 }> {
-	let capturedPerf: PerformanceTracker | undefined;
-
-	// Use a hook to capture perf tracker from the request
-	// The performance plugin automatically attaches it to the request
-	const hook = async (request: FastifyRequest) => {
-		if (request.url === "/graphql" && request.perf) {
-			capturedPerf = request.perf;
-		}
-	};
-
-	// Add hook to capture perf tracker
-	server.addHook("onRequest", hook);
-
-	try {
-		// Execute query via mercuriusClient (integration test pattern)
-		const result = await mercuriusClient.query<T>(query, options);
-		return { result, perf: capturedPerf };
-	} finally {
-		// Note: Fastify hooks are per-request lifecycle, so they don't need explicit cleanup
-		// The hook will only fire for requests during this test
+	// Register the hook once if not already registered
+	if (!perfCaptureHookRegistered) {
+		server.addHook("onRequest", perfCaptureHook);
+		perfCaptureHookRegistered = true;
 	}
+
+	// Track the current array length before the query
+	const startIndex = capturedPerfTrackers.length;
+
+	// Execute query via mercuriusClient (integration test pattern)
+	const result = await mercuriusClient.query(query, options);
+
+	// Get the perf tracker that was captured during this query
+	// For sequential tests, this will be the last entry
+	// For concurrent tests, we get the entry at startIndex (first new entry)
+	const perf =
+		capturedPerfTrackers.length > startIndex
+			? capturedPerfTrackers[startIndex]
+			: capturedPerfTrackers[capturedPerfTrackers.length - 1];
+
+	return { result, perf };
 }
 
 describe("Query organizations - Performance Tracking", () => {
@@ -265,27 +320,34 @@ describe("Query organizations - Performance Tracking", () => {
 
 	beforeEach(() => {
 		vi.useFakeTimers();
+		capturedPerfTrackers.length = 0; // Clear the array
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.clearAllMocks();
+		capturedPerfTrackers.length = 0; // Clear the array
 	});
 
 	describe("when performance tracker is available", () => {
 		it("should track query execution time on successful query (administrator)", async () => {
-			const { result, perf } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${adminAuth}`,
-				},
-				variables: {},
-			});
+			const { result, perf } =
+				await queryWithPerfTracker<OrganizationsQueryResponse>(
+					Query_organizations,
+					{
+						headers: {
+							authorization: `bearer ${adminAuth}`,
+						},
+					},
+				);
 
 			await vi.runAllTimersAsync();
 
 			expect(result.errors).toBeUndefined();
-			expect(result.data?.organizations?.length).toBeGreaterThan(1);
+			const data = result.data as OrganizationsQueryResponse;
+			expect(data?.organizations?.length).toBeGreaterThan(1);
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:organizations"];
@@ -297,18 +359,23 @@ describe("Query organizations - Performance Tracking", () => {
 		});
 
 		it("should track query execution time on successful query (regular user)", async () => {
-			const { result, perf } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${regularUser2Auth}`,
-				},
-				variables: {},
-			});
+			const { result, perf } =
+				await queryWithPerfTracker<OrganizationsQueryResponse>(
+					Query_organizations,
+					{
+						headers: {
+							authorization: `bearer ${regularUser2Auth}`,
+						},
+					},
+				);
 
 			await vi.runAllTimersAsync();
 
 			expect(result.errors).toBeUndefined();
-			expect(result.data?.organizations?.length).toBeGreaterThan(0);
+			const data = result.data as OrganizationsQueryResponse;
+			expect(data?.organizations?.length).toBeGreaterThan(0);
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:organizations"];
@@ -320,20 +387,25 @@ describe("Query organizations - Performance Tracking", () => {
 		});
 
 		it("should track query execution time on successful query (regular user with admin membership)", async () => {
-			const { result, perf } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${regularUser1Auth}`,
-				},
-				variables: {},
-			});
+			const { result, perf } =
+				await queryWithPerfTracker<OrganizationsQueryResponse>(
+					Query_organizations,
+					{
+						headers: {
+							authorization: `bearer ${regularUser1Auth}`,
+						},
+					},
+				);
 
 			await vi.runAllTimersAsync();
 
 			expect(result.errors).toBeUndefined();
 			// Regular user with admin membership should only see organizations they administer
-			expect(result.data?.organizations).toHaveLength(1);
-			expect(result.data?.organizations?.[0]?.id).toBe(org1Id);
+			const data = result.data as OrganizationsQueryResponse;
+			expect(data?.organizations).toHaveLength(1);
+			expect(data?.organizations?.[0]?.id).toBe(org1Id);
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:organizations"];
@@ -346,16 +418,30 @@ describe("Query organizations - Performance Tracking", () => {
 
 		it("should track query execution time on unauthenticated error", async () => {
 			// Use an invalid token to trigger unauthenticated error
-			const { result, perf } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer invalid-token`,
-				},
-				variables: {},
-			});
+			const { result, perf } =
+				await queryWithPerfTracker<OrganizationsQueryResponse>(
+					Query_organizations,
+					{
+						headers: {
+							authorization: `bearer invalid-token`,
+						},
+					},
+				);
 
 			await vi.runAllTimersAsync();
 
+			// Should have unauthenticated error
+			expect(result.errors).toBeDefined();
+			expect(result.errors).toContainEqual(
+				expect.objectContaining({
+					extensions: expect.objectContaining({
+						code: expect.stringMatching(/unauthorized|unauthenticated/i),
+					}),
+				}),
+			);
+
 			// Should still track performance even on errors
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:organizations"];
@@ -367,20 +453,26 @@ describe("Query organizations - Performance Tracking", () => {
 		});
 
 		it("should track query execution time with filtering", async () => {
-			const { result, perf } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${adminAuth}`,
-				},
-				variables: {
-					filter: "Test",
-				},
-			});
+			const { result, perf } =
+				await queryWithPerfTracker<OrganizationsQueryResponse>(
+					Query_organizationsWithArgs,
+					{
+						headers: {
+							authorization: `bearer ${adminAuth}`,
+						},
+						variables: {
+							filter: "Test",
+						},
+					},
+				);
 
 			await vi.runAllTimersAsync();
 
 			expect(result.errors).toBeUndefined();
-			expect(result.data?.organizations).toBeDefined();
+			const data = result.data as OrganizationsQueryResponse;
+			expect(data?.organizations).toBeDefined();
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:organizations"];
@@ -391,21 +483,27 @@ describe("Query organizations - Performance Tracking", () => {
 		});
 
 		it("should track query execution time with pagination", async () => {
-			const { result, perf } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${adminAuth}`,
-				},
-				variables: {
-					limit: 10,
-					offset: 0,
-				},
-			});
+			const { result, perf } =
+				await queryWithPerfTracker<OrganizationsQueryResponse>(
+					Query_organizationsWithArgs,
+					{
+						headers: {
+							authorization: `bearer ${adminAuth}`,
+						},
+						variables: {
+							limit: 10,
+							offset: 0,
+						},
+					},
+				);
 
 			await vi.runAllTimersAsync();
 
 			expect(result.errors).toBeUndefined();
-			expect(result.data?.organizations).toBeDefined();
+			const data = result.data as OrganizationsQueryResponse;
+			expect(data?.organizations).toBeDefined();
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:organizations"];
@@ -416,25 +514,31 @@ describe("Query organizations - Performance Tracking", () => {
 		});
 
 		it("should track multiple query executions separately", async () => {
-			const promise1 = queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${adminAuth}`,
+			const promise1 = queryWithPerfTracker<OrganizationsQueryResponse>(
+				Query_organizations,
+				{
+					headers: {
+						authorization: `bearer ${adminAuth}`,
+					},
 				},
-				variables: {},
-			});
+			);
 
-			const promise2 = queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${adminAuth}`,
+			const promise2 = queryWithPerfTracker<OrganizationsQueryResponse>(
+				Query_organizations,
+				{
+					headers: {
+						authorization: `bearer ${adminAuth}`,
+					},
 				},
-				variables: {},
-			});
+			);
 
 			await vi.runAllTimersAsync();
 			const { perf: perf1 } = await promise1;
 			const { perf: perf2 } = await promise2;
 
 			// Each query should have its own perf tracker instance
+			expect(perf1).toBeDefined();
+			expect(perf2).toBeDefined();
 			if (perf1 && perf2) {
 				const snapshot1 = perf1.snapshot();
 				const snapshot2 = perf2.snapshot();
@@ -449,26 +553,43 @@ describe("Query organizations - Performance Tracking", () => {
 	});
 
 	describe("when performance tracker is unavailable", () => {
+		let disablePerfHook: (request: FastifyRequest) => Promise<void> | void;
+
+		beforeEach(() => {
+			// Add a hook that runs after the performance plugin's hook to disable perf
+			disablePerfHook = async (request: FastifyRequest) => {
+				if (request.url === "/graphql") {
+					// Delete perf after the performance plugin sets it
+					request.perf = undefined;
+				}
+			};
+			server.addHook("onRequest", disablePerfHook);
+		});
+
+		afterEach(() => {
+			// Remove the hook to restore normal behavior
+			// Note: Fastify doesn't provide a direct way to remove hooks, but this is fine for tests
+			// as the hook will just set perf to undefined which is what we want
+		});
+
 		it("should execute query successfully without tracking", async () => {
-			const result = await mercuriusClient.query(Query_organizations, {
+			const result = (await mercuriusClient.query(Query_organizations, {
 				headers: {
 					authorization: `bearer ${adminAuth}`,
 				},
-				variables: {},
-			});
+			})) as { data?: OrganizationsQueryResult; errors?: unknown[] };
 
-			// Query should still work (performance plugin will create perf tracker automatically)
+			// Query should still work (withQueryMetrics fallback branch)
 			expect(result.errors).toBeUndefined();
 			expect(result.data?.organizations?.length).toBeGreaterThan(0);
 		});
 
 		it("should handle errors gracefully when perf tracker is unavailable", async () => {
-			const result = await mercuriusClient.query(Query_organizations, {
+			const result = (await mercuriusClient.query(Query_organizations, {
 				headers: {
 					authorization: `bearer invalid-token`,
 				},
-				variables: {},
-			});
+			})) as { data?: OrganizationsQueryResult; errors?: unknown[] };
 
 			// Should handle errors gracefully
 			expect(result.data?.organizations || result.errors).toBeDefined();
@@ -477,24 +598,26 @@ describe("Query organizations - Performance Tracking", () => {
 
 	describe("query functionality preservation", () => {
 		it("should preserve existing query behavior with perf tracker", async () => {
-			const { result } = await queryWithPerfTracker(Query_organizations, {
-				headers: {
-					authorization: `bearer ${adminAuth}`,
+			const { result } = await queryWithPerfTracker<OrganizationsQueryResponse>(
+				Query_organizations,
+				{
+					headers: {
+						authorization: `bearer ${adminAuth}`,
+					},
 				},
-				variables: {},
-			});
+			);
 
 			expect(result.errors).toBeUndefined();
-			expect(result.data?.organizations?.length).toBeGreaterThan(0);
+			const data = result.data as OrganizationsQueryResponse;
+			expect(data?.organizations?.length).toBeGreaterThan(0);
 		});
 
 		it("should preserve existing query behavior without perf tracker", async () => {
-			const result = await mercuriusClient.query(Query_organizations, {
+			const result = (await mercuriusClient.query(Query_organizations, {
 				headers: {
 					authorization: `bearer ${adminAuth}`,
 				},
-				variables: {},
-			});
+			})) as { data?: OrganizationsQueryResult; errors?: unknown[] };
 
 			expect(result.errors).toBeUndefined();
 			expect(result.data?.organizations?.length).toBeGreaterThan(0);

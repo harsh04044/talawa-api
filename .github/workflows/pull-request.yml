@@ -125,27 +125,47 @@ jobs:
       - name: Get changed files
         id: changed-files
         run: |
-          echo "all_changed_files=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          # Use NUL-delimited output for safe handling of filenames with special characters
+          git diff --name-only --diff-filter=ACMRT -z ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} > /tmp/changed_files.txt
+          # Convert NUL-delimited to JSON array for safe handling
+          python3 -c "import sys, json; files = [f for f in open('/tmp/changed_files.txt', 'rb').read().split(b'\x00') if f]; print(json.dumps([f.decode('utf-8', errors='replace') for f in files]))" > /tmp/changed_files.json
+          echo "changed_files_json<<EOF" >> $GITHUB_OUTPUT
+          cat /tmp/changed_files.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Filter existing files
         id: existing-files
         run: |
-          # Filter out files that don't exist in the current HEAD
-          EXISTING_FILES=""
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            if [ -f "$file" ]; then
-              EXISTING_FILES="$EXISTING_FILES $file"
-            fi
-          done
-          # Trim leading space and set output
-          EXISTING_FILES=$(echo "$EXISTING_FILES" | sed 's/^[[:space:]]*//')
-          echo "existing_files=$EXISTING_FILES" >> $GITHUB_OUTPUT
-          # Set a flag to indicate if any files exist
-          if [ -z "$EXISTING_FILES" ]; then
-            echo "has_files=false" >> $GITHUB_OUTPUT
-          else
-            echo "has_files=true" >> $GITHUB_OUTPUT
-          fi
+          # Parse JSON array of changed files
+          python3 << 'PYTHON_SCRIPT'
+          import json
+          import os
+          import sys
+          
+          # Read the JSON array of changed files
+          with open('/tmp/changed_files.json', 'r') as f:
+              changed_files = json.load(f)
+          
+          # Filter to only files that exist, using quoted paths for safety
+          existing_files = []
+          for file in changed_files:
+              if file and os.path.isfile(file):
+                  existing_files.append(file)
+          
+          # Write as JSON array for safe handling
+          with open('/tmp/existing_files.json', 'w') as f:
+              json.dump(existing_files, f)
+          
+          # Set has_files flag
+          has_files = len(existing_files) > 0
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"has_files={'true' if has_files else 'false'}\n")
+          PYTHON_SCRIPT
+          
+          # Output existing files as JSON for safe consumption
+          echo "existing_files_json<<EOF" >> $GITHUB_OUTPUT
+          cat /tmp/existing_files.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -155,7 +175,29 @@ jobs:
       - name: Run Disable Statements Check
         if: steps.existing-files.outputs.has_files == 'true'
         run: |
-          python .github-central/.github/workflows/scripts/disable_statements_check.py --files ${{ steps.existing-files.outputs.existing_files }}
+          # Parse JSON array from previous step and pass files safely to the script
+          python3 << 'PYTHON_SCRIPT'
+          import json
+          import subprocess
+          import sys
+          import os
+          
+          # Read the JSON array of existing files from the previous step
+          # The JSON was written to /tmp/existing_files.json in the Filter existing files step
+          with open('/tmp/existing_files.json', 'r') as f:
+              existing_files = json.load(f)
+          
+          # Build command with properly quoted file paths
+          # subprocess handles argument escaping automatically
+          cmd = [
+              sys.executable,
+              '.github-central/.github/workflows/scripts/disable_statements_check.py',
+              '--files'
+          ] + existing_files
+          
+          # Execute the command
+          sys.exit(subprocess.call(cmd))
+          PYTHON_SCRIPT
 
   check_gql_tada:
     name: Check gql tada files and configuration

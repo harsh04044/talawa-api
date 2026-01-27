@@ -1,64 +1,175 @@
-import { print } from "graphql";
+import { faker } from "@faker-js/faker";
 import type { FastifyRequest } from "fastify";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assertToBeNonNullish } from "test/helpers";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import type { PerformanceTracker } from "~/src/utilities/metrics/performanceTracker";
 import { server } from "../../../server";
 import { mercuriusClient } from "../client";
-import { Query_user } from "../documentNodes";
-import type { PerformanceTracker } from "~/src/utilities/metrics/performanceTracker";
-import { uuidv7 } from "uuidv7";
+import {
+	Mutation_createUser,
+	Mutation_deleteUser,
+	Query_signIn,
+	Query_user,
+} from "../documentNodes";
+
+/**
+ * Type for user query result
+ */
+interface UserQueryResult extends Record<string, unknown> {
+	user?: {
+		id: string;
+		name: string;
+		emailAddress: string;
+		[key: string]: unknown;
+	};
+}
+
+/**
+ * Array to store captured performance trackers
+ * Cleared between tests to avoid leaks
+ */
+const capturedPerfTrackers: PerformanceTracker[] = [];
+
+/**
+ * Single onRequest hook to capture perf trackers for all requests
+ * Registered once and reused for all test calls
+ */
+let perfCaptureHookRegistered = false;
+const perfCaptureHook = async (request: FastifyRequest) => {
+	if (request.url === "/graphql" && request.perf) {
+		capturedPerfTrackers.push(request.perf);
+	}
+};
 
 /**
  * Test helper to execute GraphQL query via mercuriusClient and capture performance tracker
- * Uses a hook to capture the perf tracker from the request object
+ * Uses a shared array to capture perf trackers, with index tracking for concurrent requests
+ *
+ * Note: The hook is registered once globally and persists across all test calls.
+ * Fastify hooks cannot be removed once registered, but this is safe because:
+ * - The hook only captures perf trackers into a shared array
+ * - The array is cleared between tests in beforeEach/afterEach
+ * - The hook is idempotent (registering multiple times would be safe, but we guard against it)
  */
-async function queryWithPerfTracker<T>(
+async function queryWithPerfTracker<
+	_T extends Record<string, unknown> = Record<string, unknown>,
+>(
 	query: Parameters<typeof mercuriusClient.query>[0],
 	options?: Parameters<typeof mercuriusClient.query>[1],
 ): Promise<{
-	result: Awaited<ReturnType<typeof mercuriusClient.query<T>>>;
+	result: Awaited<ReturnType<typeof mercuriusClient.query>>;
 	perf: PerformanceTracker | undefined;
 }> {
-	let capturedPerf: PerformanceTracker | undefined;
-
-	// Use a hook to capture perf tracker from the request
-	// The performance plugin automatically attaches it to the request
-	const hook = async (request: FastifyRequest) => {
-		if (request.url === "/graphql" && request.perf) {
-			capturedPerf = request.perf;
-		}
-	};
-
-	// Add hook to capture perf tracker
-	server.addHook("onRequest", hook);
-
-	try {
-		// Execute query via mercuriusClient (integration test pattern)
-		const result = await mercuriusClient.query<T>(query, options);
-		return { result, perf: capturedPerf };
-	} finally {
-		// Note: Fastify hooks are per-request lifecycle, so they don't need explicit cleanup
-		// The hook will only fire for requests during this test
+	// Register the hook once if not already registered
+	// Fastify hooks persist for the lifetime of the server instance, which is fine for tests
+	// since we clear the capturedPerfTrackers array between tests
+	if (!perfCaptureHookRegistered) {
+		server.addHook("onRequest", perfCaptureHook);
+		perfCaptureHookRegistered = true;
 	}
+
+	// Track the current array length before the query
+	const startIndex = capturedPerfTrackers.length;
+
+	// Execute query via mercuriusClient (integration test pattern)
+	const result = await mercuriusClient.query(query, options);
+
+	// Get the perf tracker that was captured during this query
+	// For sequential tests, this will be the last entry
+	// For concurrent tests, we get the entry at startIndex (first new entry)
+	const perf =
+		capturedPerfTrackers.length > startIndex
+			? capturedPerfTrackers[startIndex]
+			: capturedPerfTrackers[capturedPerfTrackers.length - 1];
+
+	return { result, perf };
 }
 
 describe("Query user - Performance Tracking", () => {
+	let adminAuth = "";
+	let createdUserId = "";
+	let createdUserEmail = "";
+
+	beforeAll(async () => {
+		// Sign in as administrator
+		const administratorUserSignInResult = await mercuriusClient.query(
+			Query_signIn,
+			{
+				variables: {
+					input: {
+						emailAddress: server.envConfig.API_ADMINISTRATOR_USER_EMAIL_ADDRESS,
+						password: server.envConfig.API_ADMINISTRATOR_USER_PASSWORD,
+					},
+				},
+			},
+		);
+		assertToBeNonNullish(
+			administratorUserSignInResult.data.signIn?.authenticationToken,
+		);
+		adminAuth = administratorUserSignInResult.data.signIn.authenticationToken;
+
+		// Create a user for testing
+		createdUserEmail = `email${faker.string.ulid()}@email.com`;
+		const createUserResult = await mercuriusClient.mutate(Mutation_createUser, {
+			headers: {
+				authorization: `bearer ${adminAuth}`,
+			},
+			variables: {
+				input: {
+					emailAddress: createdUserEmail,
+					isEmailAddressVerified: false,
+					name: "Test User",
+					password: "password",
+					role: "regular",
+				},
+			},
+		});
+		assertToBeNonNullish(createUserResult.data.createUser?.user?.id);
+		createdUserId = createUserResult.data.createUser.user.id;
+	});
+
+	afterAll(async () => {
+		// Clean up created user
+		if (createdUserId) {
+			await mercuriusClient.mutate(Mutation_deleteUser, {
+				headers: {
+					authorization: `bearer ${adminAuth}`,
+				},
+				variables: {
+					input: {
+						id: createdUserId,
+					},
+				},
+			});
+		}
+	});
+
 	beforeEach(() => {
 		vi.useFakeTimers();
+		capturedPerfTrackers.length = 0; // Clear the array
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.clearAllMocks();
+		capturedPerfTrackers.length = 0; // Clear the array
 	});
 
 	describe("when performance tracker is available", () => {
 		it("should track query execution time on successful query", async () => {
-			const userId = uuidv7();
-
 			const { result, perf } = await queryWithPerfTracker(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: createdUserId,
 					},
 				},
 			});
@@ -66,16 +177,20 @@ describe("Query user - Performance Tracking", () => {
 			await vi.runAllTimersAsync();
 
 			expect(result.errors).toBeUndefined();
-			expect(result.data?.user).toBeDefined();
+			const data = result.data as UserQueryResult;
+			expect(data?.user).toBeDefined();
+			expect(data?.user?.id).toBe(createdUserId);
 
-			if (perf) {
-				const snapshot = perf.snapshot();
-				const op = snapshot.ops["query:user"];
-
-				expect(op).toBeDefined();
-				expect(op?.count).toBe(1);
-				expect(op?.ms).toBeGreaterThanOrEqual(0);
+			expect(perf).toBeDefined();
+			if (!perf) {
+				throw new Error("Performance tracker should be defined");
 			}
+			const snapshot = perf.snapshot();
+			const op = snapshot.ops["query:user"];
+
+			expect(op).toBeDefined();
+			expect(op?.count).toBe(1);
+			expect(op?.ms).toBeGreaterThanOrEqual(0);
 		});
 
 		it("should track query execution time on validation error", async () => {
@@ -91,6 +206,7 @@ describe("Query user - Performance Tracking", () => {
 
 			expect(result.errors).toBeDefined();
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:user"];
@@ -102,12 +218,12 @@ describe("Query user - Performance Tracking", () => {
 		});
 
 		it("should track query execution time on resource not found error", async () => {
-			const userId = uuidv7();
+			const nonExistentUserId = faker.string.uuid();
 
 			const { result, perf } = await queryWithPerfTracker(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: nonExistentUserId,
 					},
 				},
 			});
@@ -116,6 +232,7 @@ describe("Query user - Performance Tracking", () => {
 
 			expect(result.errors).toBeDefined();
 
+			expect(perf).toBeDefined();
 			if (perf) {
 				const snapshot = perf.snapshot();
 				const op = snapshot.ops["query:user"];
@@ -127,13 +244,10 @@ describe("Query user - Performance Tracking", () => {
 		});
 
 		it("should track multiple query executions separately", async () => {
-			const userId1 = uuidv7();
-			const userId2 = uuidv7();
-
 			const promise1 = queryWithPerfTracker(Query_user, {
 				variables: {
 					input: {
-						id: userId1,
+						id: createdUserId,
 					},
 				},
 			});
@@ -141,7 +255,7 @@ describe("Query user - Performance Tracking", () => {
 			const promise2 = queryWithPerfTracker(Query_user, {
 				variables: {
 					input: {
-						id: userId2,
+						id: createdUserId,
 					},
 				},
 			});
@@ -151,6 +265,8 @@ describe("Query user - Performance Tracking", () => {
 			const { perf: perf2 } = await promise2;
 
 			// Each query should have its own perf tracker instance
+			expect(perf1).toBeDefined();
+			expect(perf2).toBeDefined();
 			if (perf1 && perf2) {
 				const snapshot1 = perf1.snapshot();
 				const snapshot2 = perf2.snapshot();
@@ -165,46 +281,60 @@ describe("Query user - Performance Tracking", () => {
 	});
 
 	describe("when performance tracker is unavailable", () => {
-		it("should execute query successfully without tracking (undefined)", async () => {
-			const userId = uuidv7();
+		let disablePerfHook: (request: FastifyRequest) => Promise<void> | void;
 
-			const result = await mercuriusClient.query(Query_user, {
+		beforeEach(() => {
+			// Add a hook that runs after the performance plugin's hook to disable perf
+			disablePerfHook = async (request: FastifyRequest) => {
+				if (request.url === "/graphql") {
+					// Delete perf after the performance plugin sets it
+					request.perf = undefined;
+				}
+			};
+			server.addHook("onRequest", disablePerfHook);
+		});
+
+		afterEach(() => {
+			// Note: Fastify doesn't provide a direct way to remove hooks, but this is fine for tests
+			// as the hook will just set perf to undefined which is what we want
+		});
+
+		it("should execute query successfully without tracking (undefined)", async () => {
+			const result = (await mercuriusClient.query(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: createdUserId,
 					},
 				},
-			});
+			})) as { data?: UserQueryResult; errors?: unknown[] };
 
-			// Query should still work (performance plugin will create perf tracker automatically)
+			// Query should still work (withQueryMetrics fallback branch)
 			expect(result.data?.user || result.errors).toBeDefined();
 		});
 
 		it("should execute query successfully without tracking (null)", async () => {
-			const userId = uuidv7();
-
-			const result = await mercuriusClient.query(Query_user, {
+			const result = (await mercuriusClient.query(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: createdUserId,
 					},
 				},
-			});
+			})) as { data?: UserQueryResult; errors?: unknown[] };
 
 			// Query should still work
 			expect(result.data?.user || result.errors).toBeDefined();
 		});
 
 		it("should handle errors gracefully when perf tracker is unavailable", async () => {
-			const userId = uuidv7();
+			const nonExistentUserId = faker.string.uuid();
 
-			const result = await mercuriusClient.query(Query_user, {
+			const result = (await mercuriusClient.query(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: nonExistentUserId,
 					},
 				},
-			});
+			})) as { data?: UserQueryResult; errors?: unknown[] };
 
 			// Should handle errors gracefully
 			expect(result.data?.user || result.errors).toBeDefined();
@@ -213,12 +343,10 @@ describe("Query user - Performance Tracking", () => {
 
 	describe("query functionality preservation", () => {
 		it("should preserve existing query behavior with perf tracker", async () => {
-			const userId = uuidv7();
-
 			const { result } = await queryWithPerfTracker(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: createdUserId,
 					},
 				},
 			});
@@ -227,15 +355,13 @@ describe("Query user - Performance Tracking", () => {
 		});
 
 		it("should preserve existing query behavior without perf tracker", async () => {
-			const userId = uuidv7();
-
-			const result = await mercuriusClient.query(Query_user, {
+			const result = (await mercuriusClient.query(Query_user, {
 				variables: {
 					input: {
-						id: userId,
+						id: createdUserId,
 					},
 				},
-			});
+			})) as { data?: UserQueryResult; errors?: unknown[] };
 
 			expect(result.data?.user || result.errors).toBeDefined();
 		});

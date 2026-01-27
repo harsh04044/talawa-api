@@ -749,6 +749,19 @@ export const Query_organizations = gql(`
 	}
 `);
 
+export const Query_organizationsWithArgs = gql(`
+	query Query_organizationsWithArgs($filter: String, $limit: Int, $offset: Int) {
+		organizations(filter: $filter, limit: $limit, offset: $offset) {
+			id
+      avatarURL
+      name
+      city
+      state
+      countryCode
+		}
+	}
+`);
+
 export const Query_blockedUsers = gql(`
 	query BlockedUsers(
 		$organizationId: String!

@@ -5,6 +5,7 @@ import {
 	queryOrganizationInputSchema,
 } from "~/src/graphql/inputs/QueryOrganizationInput";
 import { Organization } from "~/src/graphql/types/Organization/Organization";
+import { withQueryMetrics } from "~/src/graphql/utils/withQueryMetrics";
 import envConfig from "~/src/utilities/graphqLimits";
 import { TalawaGraphQLError } from "~/src/utilities/TalawaGraphQLError";
 
@@ -23,8 +24,9 @@ builder.queryField("organization", (t) =>
 		},
 		complexity: envConfig.API_GRAPHQL_OBJECT_FIELD_COST,
 		description: "Query field to read an organization.",
-		resolve: async (_parent, args, ctx) => {
-			const resolver = async () => {
+		resolve: withQueryMetrics(
+			{ operationName: "query:organization" },
+			async (_parent, args, ctx) => {
 				const {
 					data: parsedArgs,
 					error,
@@ -63,14 +65,8 @@ builder.queryField("organization", (t) =>
 				}
 
 				return organization;
-			};
-
-			if (ctx.perf) {
-				return await ctx.perf.time("query:organization", resolver);
-			}
-
-			return await resolver();
-		},
+			},
+		),
 		type: Organization,
 	}),
 );

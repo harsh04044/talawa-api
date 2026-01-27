@@ -8,6 +8,7 @@ import {
 } from "~/src/graphql/inputs/QueryEventInput";
 import { Event } from "~/src/graphql/types/Event/Event";
 import { getEventsByIds } from "~/src/graphql/types/Query/eventQueries";
+import { withQueryMetrics } from "~/src/graphql/utils/withQueryMetrics";
 import envConfig from "~/src/utilities/graphqLimits";
 import { TalawaGraphQLError } from "~/src/utilities/TalawaGraphQLError";
 
@@ -32,8 +33,9 @@ builder.queryField("event", (t) =>
 		complexity: envConfig.API_GRAPHQL_OBJECT_FIELD_COST,
 		description:
 			"Retrieves a single event by its ID, supporting both standalone events and materialized recurring instances.",
-		resolve: async (_parent, args, ctx) => {
-			const resolver = async () => {
+		resolve: withQueryMetrics(
+			{ operationName: "query:event" },
+			async (_parent, args, ctx) => {
 				if (!ctx.currentClient.isAuthenticated) {
 					throw new TalawaGraphQLError({
 						extensions: {
@@ -185,14 +187,8 @@ builder.queryField("event", (t) =>
 				}
 
 				return event;
-			};
-
-			if (ctx.perf) {
-				return await ctx.perf.time("query:event", resolver);
-			}
-
-			return await resolver();
-		},
+			},
+		),
 		type: Event,
 	}),
 );
