@@ -202,16 +202,13 @@ class DisableStatementsChecker:
             (".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx")
         )
 
-        # Skip files that don't exist (they may have been deleted or
-        # not yet generated)
-        if not os.path.exists(file_path):
-            return []
-
+        # Rely on exception handling to handle deleted/missing files
+        # (TOCTOU-safe: avoids race condition between existence check and open)
         try:
             with open(file_path, encoding="utf-8") as f:
                 content = f.read()
         except FileNotFoundError:
-            # File was deleted between existence check and open
+            # File was deleted or doesn't exist - skip silently
             return []
         except (OSError, UnicodeDecodeError) as e:
             # Other errors (permissions, encoding, etc.) are real issues

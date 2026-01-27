@@ -4,6 +4,7 @@ import type { organizationsTable } from "~/src/drizzle/schema";
 import { builder } from "~/src/graphql/builder";
 import type { GraphQLContext } from "~/src/graphql/context";
 import { Organization } from "~/src/graphql/types/Organization/Organization";
+import { withQueryMetrics } from "~/src/graphql/utils/withQueryMetrics";
 import envConfig from "~/src/utilities/graphqLimits";
 import { TalawaGraphQLError } from "~/src/utilities/TalawaGraphQLError";
 
@@ -20,12 +21,13 @@ interface OrganizationsArgs {
 /**
  * Resolver to fetch organizations with optional filtering.
  */
-export const resolveOrganizations = async (
-	_parent: unknown,
-	args: OrganizationsArgs,
-	ctx: GraphQLContext,
-): Promise<OrganizationType[]> => {
-	const resolver = async () => {
+export const resolveOrganizations = withQueryMetrics(
+	{ operationName: "query:organizations" },
+	async (
+		_parent: unknown,
+		args: OrganizationsArgs,
+		ctx: GraphQLContext,
+	): Promise<OrganizationType[]> => {
 		const { filter, limit, offset } = args; // No default values to allow fetching all records
 		const currentUserId = ctx.currentClient?.user?.id;
 
@@ -107,14 +109,8 @@ export const resolveOrganizations = async (
 			// Preserve original error to maintain GraphQL error codes and metadata
 			throw error;
 		}
-	};
-
-	if (ctx.perf) {
-		return await ctx.perf.time("query:organizations", resolver);
-	}
-
-	return await resolver();
-};
+	},
+);
 
 builder.queryField("organizations", (t) =>
 	t.field({

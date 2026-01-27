@@ -5,6 +5,7 @@ import {
 	queryUserInputSchema,
 } from "~/src/graphql/inputs/QueryUserInput";
 import { User } from "~/src/graphql/types/User/User";
+import { withQueryMetrics } from "~/src/graphql/utils/withQueryMetrics";
 import envConfig from "~/src/utilities/graphqLimits";
 import { TalawaGraphQLError } from "~/src/utilities/TalawaGraphQLError";
 
@@ -23,8 +24,9 @@ builder.queryField("user", (t) =>
 		},
 		complexity: envConfig.API_GRAPHQL_OBJECT_FIELD_COST,
 		description: "Query field to read a user.",
-		resolve: async (_parent, args, ctx) => {
-			const resolver = async () => {
+		resolve: withQueryMetrics(
+			{ operationName: "query:user" },
+			async (_parent, args, ctx) => {
 				const {
 					data: parsedArgs,
 					error,
@@ -62,14 +64,8 @@ builder.queryField("user", (t) =>
 				}
 
 				return user;
-			};
-
-			if (ctx.perf) {
-				return await ctx.perf.time("query:user", resolver);
-			}
-
-			return await resolver();
-		},
+			},
+		),
 		type: User,
 	}),
 );
