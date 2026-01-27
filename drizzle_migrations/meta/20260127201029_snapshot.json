@@ -1,6 +1,6 @@
 {
-  "id": "45b495a7-a3d4-4f1e-9ed0-22aa8737b2fb",
-  "prevId": "e4680473-e361-4598-882f-14b689482add",
+  "id": "d809e90b-7ca4-412f-bb25-fcc04cbbcee6",
+  "prevId": "45b495a7-a3d4-4f1e-9ed0-22aa8737b2fb",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1892,6 +1892,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "category_id": {
+          "name": "category_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "description": {
           "name": "description",
           "type": "text",
@@ -1903,6 +1909,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
         },
         "folder_id": {
           "name": "folder_id",
@@ -1925,6 +1937,18 @@
         "name": {
           "name": "name",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1968,6 +1992,36 @@
           "columns": [
             {
               "expression": "creator_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agenda_items_category_id_index": {
+          "name": "agenda_items_category_id_index",
+          "columns": [
+            {
+              "expression": "category_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agenda_items_event_id_index": {
+          "name": "agenda_items_event_id_index",
+          "columns": [
+            {
+              "expression": "event_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2036,6 +2090,32 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "cascade"
+        },
+        "agenda_items_category_id_agenda_categories_id_fk": {
+          "name": "agenda_items_category_id_agenda_categories_id_fk",
+          "tableFrom": "agenda_items",
+          "tableTo": "agenda_categories",
+          "columnsFrom": [
+            "category_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "cascade"
+        },
+        "agenda_items_event_id_events_id_fk": {
+          "name": "agenda_items_event_id_events_id_fk",
+          "tableFrom": "agenda_items",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "cascade"
         },
         "agenda_items_folder_id_agenda_folders_id_fk": {

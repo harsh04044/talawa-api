@@ -166,16 +166,19 @@ jobs:
           with open('/tmp/existing_files.json', 'w') as f:
               json.dump(existing_files, f)
           
-          # Set has_files flag
+          # Set has_files flag and output existing files as JSON
           has_files = len(existing_files) > 0
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"has_files={'true' if has_files else 'false'}\n")
+              # Use a unique delimiter that's unlikely to appear in JSON
+              delimiter = "EOF_EXISTING_FILES_JSON"
+              f.write(f"existing_files_json<<{delimiter}\n")
+              # Read and write JSON content, ensuring no trailing newline issues
+              with open('/tmp/existing_files.json', 'r') as json_file:
+                  json_content = json_file.read().rstrip('\n')
+                  f.write(json_content)
+                  f.write(f"\n{delimiter}\n")
           PYTHON_SCRIPT
-          
-          # Output existing files as JSON for safe consumption
-          echo "existing_files_json<<GITHUB_OUTPUT_DELIMITER_EXISTING_FILES" >> $GITHUB_OUTPUT
-          cat /tmp/existing_files.json >> $GITHUB_OUTPUT
-          echo "GITHUB_OUTPUT_DELIMITER_EXISTING_FILES" >> $GITHUB_OUTPUT
 
       - name: Set up Python
         uses: actions/setup-python@v5
