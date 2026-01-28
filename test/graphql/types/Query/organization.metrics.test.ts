@@ -1,5 +1,5 @@
 import type { FastifyRequest } from "fastify";
-import { uuidv7 } from "uuidv7";
+import { ulid } from "ulidx";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PerformanceTracker } from "~/src/utilities/metrics/performanceTracker";
 import { server } from "../../../server";
@@ -52,7 +52,7 @@ describe("Query organization - Performance Tracking", () => {
 
 	describe("when performance tracker is available", () => {
 		it("should track query execution time on successful query", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const { perf } = await queryWithPerfTracker(Query_organization, {
 				variables: {
@@ -103,7 +103,7 @@ describe("Query organization - Performance Tracking", () => {
 		});
 
 		it("should track query execution time on resource not found error", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const { result, perf } = await queryWithPerfTracker(Query_organization, {
 				variables: {
@@ -130,8 +130,8 @@ describe("Query organization - Performance Tracking", () => {
 		});
 
 		it("should track multiple query executions separately", async () => {
-			const orgId1 = uuidv7();
-			const orgId2 = uuidv7();
+			const orgId1 = ulid();
+			const orgId2 = ulid();
 
 			const promise1 = queryWithPerfTracker(Query_organization, {
 				variables: {
@@ -169,7 +169,7 @@ describe("Query organization - Performance Tracking", () => {
 
 	describe("when performance tracker is unavailable", () => {
 		it("should execute query successfully without tracking (undefined)", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const result = await mercuriusClient.query(Query_organization, {
 				variables: {
@@ -184,7 +184,7 @@ describe("Query organization - Performance Tracking", () => {
 		});
 
 		it("should execute query successfully without tracking (null)", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const result = await mercuriusClient.query(Query_organization, {
 				variables: {
@@ -199,7 +199,7 @@ describe("Query organization - Performance Tracking", () => {
 		});
 
 		it("should handle errors gracefully when perf tracker is unavailable", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const result = await mercuriusClient.query(Query_organization, {
 				variables: {
@@ -216,7 +216,7 @@ describe("Query organization - Performance Tracking", () => {
 
 	describe("query functionality preservation", () => {
 		it("should preserve existing query behavior with perf tracker", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const { result } = await queryWithPerfTracker(Query_organization, {
 				variables: {
@@ -230,7 +230,7 @@ describe("Query organization - Performance Tracking", () => {
 		});
 
 		it("should preserve existing query behavior without perf tracker", async () => {
-			const orgId = uuidv7();
+			const orgId = ulid();
 
 			const result = await mercuriusClient.query(Query_organization, {
 				variables: {

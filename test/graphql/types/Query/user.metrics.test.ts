@@ -218,7 +218,7 @@ describe("Query user - Performance Tracking", () => {
 		});
 
 		it("should track query execution time on resource not found error", async () => {
-			const nonExistentUserId = faker.string.uuid();
+			const nonExistentUserId = faker.string.ulid();
 
 			const { result, perf } = await queryWithPerfTracker(Query_user, {
 				variables: {
@@ -326,7 +326,7 @@ describe("Query user - Performance Tracking", () => {
 		});
 
 		it("should handle errors gracefully when perf tracker is unavailable", async () => {
-			const nonExistentUserId = faker.string.uuid();
+			const nonExistentUserId = faker.string.ulid();
 
 			const result = (await mercuriusClient.query(Query_user, {
 				variables: {
