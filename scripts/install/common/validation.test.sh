@@ -327,6 +327,7 @@ test_invalid_path $'/tmp/foo\'out' "single quote"
 test_invalid_path '/tmp/foo"out' "double quote"
 test_invalid_path '/tmp/foo\out' "backslash"
 test_invalid_path '/tmp/foo out' "space"
+test_invalid_path '/tmp/foo`out' "backtick (command substitution)"
 
 ##############################################################################
 # Test: run_cmd() and DRY_RUN
